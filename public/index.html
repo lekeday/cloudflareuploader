@@ -175,6 +175,17 @@
                         </div>
                     </div>
 
+                    <!-- Staging Selection Bar -->
+                    <div x-show="stagedFiles.length > 0" class="flex items-center justify-between px-3 py-2 rounded-xl bg-slate-900/40 border border-slate-800/60 text-xs">
+                        <label class="flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" :checked="isAllSelected()" @change="toggleSelectAll($event.target.checked)" class="w-4 h-4 rounded border-slate-700 bg-slate-900 text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-500">
+                            <span class="font-semibold text-slate-300">Select All</span>
+                        </label>
+                        <div class="text-slate-400">
+                            <span class="text-indigo-400 font-bold" x-text="selectedFilesCount"></span> of <span x-text="stagedFiles.length"></span> ready for upload
+                        </div>
+                    </div>
+
                     <!-- Staged List / Empty State -->
                     <div class="space-y-3 max-h-[450px] overflow-y-auto custom-scrollbar pr-1">
                         <template x-if="stagedFiles.length === 0">
@@ -188,8 +199,11 @@
                         </template>
 
                         <template x-for="(file, index) in stagedFiles" :key="index">
-                            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800/70 hover:border-slate-700 transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                            <div :class="{'border-indigo-500/30 bg-indigo-950/10': file.selected !== false, 'opacity-70': file.selected === false}" class="p-4 rounded-xl bg-slate-900/60 border border-slate-800/70 hover:border-slate-700 transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                                 <div class="flex items-start gap-3 flex-1 min-w-0">
+                                    <!-- Selection Checkbox -->
+                                    <input type="checkbox" x-model="file.selected" :disabled="file.status === 'uploading' || file.status === 'success'" class="w-4 h-4 rounded border-slate-700 bg-slate-900 text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-500 flex-shrink-0 mt-3 md:mt-2.5">
+
                                     <div class="w-10 h-10 rounded-lg bg-indigo-500/10 flex-shrink-0 flex items-center justify-center text-indigo-400">
                                         <i data-lucide="file-text" class="w-5 h-5"></i>
                                     </div>
@@ -274,13 +288,13 @@
                     </div>
 
                     <!-- Batch Upload Button -->
-                    <button @click="startBatchUpload()" :disabled="isUploading || stagedFiles.length === 0 || !targetCollectionId" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed font-bold text-sm text-white shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition">
+                    <button @click="startBatchUpload()" :disabled="isUploading || selectedFilesCount === 0 || !targetCollectionId" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed font-bold text-sm text-white shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition">
                         <i data-lucide="upload" class="w-4 h-4" x-show="!isUploading"></i>
                         <svg x-show="isUploading" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <span x-text="isUploading ? `Uploading (${activeWorkerCount} active)...` : `Upload ${stagedFiles.length} Ebooks`"></span>
+                        <span x-text="isUploading ? `Uploading (${activeWorkerCount} active)...` : (selectedFilesCount > 0 ? `Upload ${selectedFilesCount} Selected Ebooks` : 'No Ebooks Selected')"></span>
                     </button>
                 </div>
             </div>
@@ -683,18 +697,40 @@
                             abstract: abstract,
                             department: this.targetDepartment,
                             file_size: file.size,
+                            selected: true,
                             status: 'pending'
                         });
                     }
                     this.$nextTick(() => lucide.createIcons());
                 },
 
-                // Concurrent Staggered Batch Queue Worker
+                get selectedFilesCount() {
+                    return this.stagedFiles.filter(f => f.selected !== false && f.status !== 'success').length;
+                },
+
+                isAllSelected() {
+                    return this.stagedFiles.length > 0 && this.stagedFiles.every(f => f.selected !== false);
+                },
+
+                toggleSelectAll(checked) {
+                    this.stagedFiles.forEach(f => {
+                        if (f.status !== 'success' && f.status !== 'uploading') {
+                            f.selected = checked;
+                        }
+                    });
+                },
+
+                // Concurrent Staggered Batch Queue Worker for Selected Files
                 async startBatchUpload() {
                     if (this.stagedFiles.length === 0 || !this.targetCollectionId) return;
-                    this.isUploading = true;
+                    
+                    const pendingItems = this.stagedFiles.filter(item => item.selected !== false && item.status !== 'success');
+                    if (pendingItems.length === 0) {
+                        alert("No ebooks selected for upload. Please check at least one ebook.");
+                        return;
+                    }
 
-                    const pendingItems = this.stagedFiles.filter(item => item.status !== 'success');
+                    this.isUploading = true;
                     const maxConcurrency = Math.max(1, parseInt(this.concurrencyLimit) || 3);
                     let currentIndex = 0;
 
@@ -734,6 +770,7 @@
                                 const resData = await resp.json();
                                 if (resp.ok && resData.success) {
                                     item.status = 'success';
+                                    item.selected = false;
                                     this.uploadedCount++;
                                 } else {
                                     item.status = 'failed';
