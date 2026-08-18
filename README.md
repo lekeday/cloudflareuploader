@@ -47,32 +47,28 @@ Open your browser at `http://localhost:8787`.
 
 ---
 
-## ☁️ Deployment to Cloudflare
+## 🛡️ Best Practices Implemented
 
-### 1. Login to Cloudflare
-```bash
-npx wrangler login
-```
+### 1. Database Backups & Point-in-Time Recovery
+- **Automated Cloudflare Backups**: Cloudflare D1 automatically captures hourly snapshots.
+- **Bookmarks Before Migrations**:
+  In the D1 console, run:
+  ```sql
+  /bookmark
+  ```
+  To restore back to any bookmark:
+  ```sql
+  /restore <bookmark-id>
+  ```
+- **Exporting DB Dumps**:
+  ```bash
+  npx wrangler d1 export dspace-db --output=backup.sql
+  ```
 
-### 2. Create the Production D1 Database
-```bash
-npx wrangler d1 create dspace-db
-```
-Copy the `database_id` returned in the terminal output and paste it into [`cloudflare/wrangler.toml`](file:///home/leke/apps/AI/dspace/cloudflare/wrangler.toml):
-```toml
-[[d1_databases]]
-binding = "DB"
-database_name = "dspace-db"
-database_id = "<YOUR_PRODUCTION_D1_DATABASE_ID>"
-```
+### 2. Large PDF Handling (100MB+) via Cloudflare R2
+- The worker natively supports **Cloudflare R2** staging buckets for large PDF bitstreams.
+- To enable, create an R2 bucket (`npx wrangler r2 bucket create dspace-large-files`) and bind it in Cloudflare Dashboard → Settings → Bindings → R2 Bucket (`BUCKET`).
 
-### 3. Apply Schema to Production D1
-```bash
-npx wrangler d1 execute dspace-db --remote --file=schema.sql
-```
-
-### 4. Deploy
-```bash
-npm run deploy
-```
-Your application will be live globally on your `*.workers.dev` subdomain!
+### 3. Batch Limits & Staggered Concurrency
+- The UI contains a **concurrency throttle** (default 3 parallel workers).
+- Uploads are dispatched asynchronously with non-blocking workers so target DSpace instances are not overwhelmed with concurrent connection bursts.

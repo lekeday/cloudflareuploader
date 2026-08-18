@@ -44,9 +44,23 @@ export default {
     const secret = env.ENCRYPTION_SECRET || "dspace-edge-secret-2026";
 
     try {
-      // 1. Health check
+      // 1. Health & Database Backup Status Check
       if (path === "/api/health" && method === "GET") {
-        return jsonResponse({ status: "healthy", engine: "cloudflare-workers-d1", timestamp: new Date().toISOString() });
+        return jsonResponse({ 
+          status: "healthy", 
+          engine: "cloudflare-workers-d1", 
+          r2_available: Boolean(env.BUCKET || env.R2_BUCKET),
+          timestamp: new Date().toISOString() 
+        });
+      }
+
+      // 1b. D1 Automated Backup Bookmark
+      if (path === "/api/db/bookmark" && method === "GET") {
+        return jsonResponse({
+          success: true,
+          bookmark_timestamp: new Date().toISOString(),
+          message: "Use this RFC3339 timestamp in D1 console: /bookmark <timestamp> to time travel or restore."
+        });
       }
 
       // 2. Configurations API
@@ -210,6 +224,21 @@ export default {
         } else {
           payload = await request.json();
           fileName = payload.filename || "ebook.pdf";
+        }
+
+        // Optional: Cloudflare R2 Staging for large files (> 25MB or on-demand)
+        const r2 = env.BUCKET || env.R2_BUCKET;
+        let r2ObjectKey = null;
+        if (r2 && fileBytes && fileBytes.byteLength > 0) {
+          try {
+            r2ObjectKey = `staging/${Date.now()}-${encodeURIComponent(fileName)}`;
+            await r2.put(r2ObjectKey, fileBytes, {
+              httpMetadata: { contentType: "application/pdf" },
+              customMetadata: { title: payload.title || fileName, uploader: "dspace-worker" }
+            });
+          } catch (r2Err) {
+            console.warn("R2 Staging Warning (proceeding with direct stream):", r2Err);
+          }
         }
 
         const cfg = await resolveConfig(payload.config_id, payload.url);

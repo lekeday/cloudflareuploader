@@ -8,6 +8,11 @@ compatibility_flags = ["nodejs_compat"]
 directory = "./public"
 binding = "ASSETS"
 
+# Optional Cloudflare R2 Bucket for staging 100MB+ large PDFs
+# [[r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "dspace-large-files"
+
 # Environment variables
 [vars]
 ENVIRONMENT = "production"

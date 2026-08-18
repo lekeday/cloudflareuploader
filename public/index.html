@@ -255,6 +255,16 @@
                         <input type="text" x-model="targetDepartment" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. Computer Science, Medical, General">
                     </div>
 
+                    <!-- Concurrency & Staggered Rate Limit Setting -->
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between text-xs font-semibold text-slate-300">
+                            <span>Upload Concurrency</span>
+                            <span class="text-indigo-400 font-mono" x-text="`${concurrencyLimit} parallel workers`"></span>
+                        </div>
+                        <input type="range" min="1" max="5" step="1" x-model="concurrencyLimit" class="w-full h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                        <p class="text-[11px] text-slate-500">Staggers uploads (recommended 2–3) to prevent DSpace API throttling.</p>
+                    </div>
+
                     <!-- Batch Upload Button -->
                     <button @click="startBatchUpload()" :disabled="isUploading || stagedFiles.length === 0 || !targetCollectionId" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed font-bold text-sm text-white shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition">
                         <i data-lucide="upload" class="w-4 h-4" x-show="!isUploading"></i>
@@ -262,7 +272,7 @@
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <span x-text="isUploading ? 'Uploading Batch...' : `Upload ${stagedFiles.length} Ebooks`"></span>
+                        <span x-text="isUploading ? `Uploading (${activeWorkerCount} active)...` : `Upload ${stagedFiles.length} Ebooks`"></span>
                     </button>
                 </div>
             </div>
@@ -409,6 +419,8 @@
                 openCollectionModal: false,
                 isLoadingCollections: false,
                 isUploading: false,
+                concurrencyLimit: 3,
+                activeWorkerCount: 0,
                 activeConfig: null,
                 targetCollectionId: '',
                 targetDepartment: 'General',
@@ -504,7 +516,7 @@
                         let title = file.name.replace(/\.[^/.]+$/, "");
                         let author = "";
 
-                        // Client-side PDF Metadata Extraction with PDF.js!
+                        // Client-side PDF Metadata Extraction with PDF.js
                         if (file.name.toLowerCase().endsWith('.pdf')) {
                             try {
                                 const arrayBuffer = await file.arrayBuffer();
@@ -533,48 +545,62 @@
                     this.$nextTick(() => lucide.createIcons());
                 },
 
+                // Concurrent Staggered Batch Queue Worker
                 async startBatchUpload() {
                     if (this.stagedFiles.length === 0 || !this.targetCollectionId) return;
                     this.isUploading = true;
 
-                    for (const item of this.stagedFiles) {
-                        if (item.status === 'success') continue;
-                        item.status = 'uploading';
+                    const pendingItems = this.stagedFiles.filter(item => item.status !== 'success');
+                    const maxConcurrency = Math.max(1, parseInt(this.concurrencyLimit) || 3);
+                    let currentIndex = 0;
 
-                        try {
-                            const formData = new FormData();
-                            formData.append('file', item.rawFile);
-                            formData.append('metadata', JSON.stringify({
-                                config_id: this.activeConfig?.id,
-                                url: this.activeConfig?.url,
-                                collection_identifier: this.targetCollectionId,
-                                version: this.activeConfig?.detected_version || 'v7',
-                                title: item.title,
-                                author: item.author,
-                                isbn: item.isbn,
-                                department: this.targetDepartment,
-                                filename: item.filename,
-                                file_size: item.file_size
-                            }));
+                    const runWorker = async () => {
+                        while (currentIndex < pendingItems.length) {
+                            const item = pendingItems[currentIndex++];
+                            this.activeWorkerCount++;
+                            item.status = 'uploading';
 
-                            const resp = await fetch('/api/upload-ebook', {
-                                method: 'POST',
-                                body: formData
-                            });
+                            try {
+                                const formData = new FormData();
+                                formData.append('file', item.rawFile);
+                                formData.append('metadata', JSON.stringify({
+                                    config_id: this.activeConfig?.id,
+                                    url: this.activeConfig?.url,
+                                    collection_identifier: this.targetCollectionId,
+                                    version: this.activeConfig?.detected_version || 'v7',
+                                    title: item.title,
+                                    author: item.author,
+                                    isbn: item.isbn,
+                                    department: this.targetDepartment,
+                                    filename: item.filename,
+                                    file_size: item.file_size
+                                }));
 
-                            const resData = await resp.json();
-                            if (resp.ok && resData.success) {
-                                item.status = 'success';
-                                this.uploadedCount++;
-                            } else {
+                                const resp = await fetch('/api/upload-ebook', {
+                                    method: 'POST',
+                                    body: formData
+                                });
+
+                                const resData = await resp.json();
+                                if (resp.ok && resData.success) {
+                                    item.status = 'success';
+                                    this.uploadedCount++;
+                                } else {
+                                    item.status = 'failed';
+                                    this.failedCount++;
+                                }
+                            } catch (err) {
                                 item.status = 'failed';
                                 this.failedCount++;
+                            } finally {
+                                this.activeWorkerCount--;
                             }
-                        } catch (err) {
-                            item.status = 'failed';
-                            this.failedCount++;
                         }
-                    }
+                    };
+
+                    // Launch concurrent worker pool
+                    const workers = Array.from({ length: Math.min(maxConcurrency, pendingItems.length) }, () => runWorker());
+                    await Promise.all(workers);
 
                     this.isUploading = false;
                     await this.fetchHistory();
