@@ -204,12 +204,20 @@
                                                 <i data-lucide="bookmark" class="w-3.5 h-3.5 text-slate-500"></i>
                                                 <input type="text" x-model="file.isbn" class="bg-transparent border-b border-transparent hover:border-slate-700 focus:border-indigo-500 px-1 py-0.5 text-xs text-slate-300 outline-none w-24" placeholder="ISBN">
                                             </span>
+                                            <span class="px-2 py-0.5 rounded bg-slate-800 text-[10px] text-indigo-300 font-semibold" x-text="file.doc_type || 'Book'"></span>
+                                            <span x-show="file.date" class="px-2 py-0.5 rounded bg-slate-800 text-[10px] text-amber-300 font-mono" x-text="file.date"></span>
                                             <span class="text-slate-500" x-text="formatBytes(file.file_size)"></span>
                                         </div>
                                     </div>
                                 </div>
 
                                 <div class="flex items-center gap-2 flex-shrink-0">
+                                    <!-- Edit Full Metadata Button -->
+                                    <button @click="openMetadataModal(file, index)" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600/30 hover:border-indigo-500/40 border border-slate-700/60 text-slate-300 hover:text-indigo-300 transition flex items-center gap-1.5 text-xs font-semibold">
+                                        <i data-lucide="edit-3" class="w-3.5 h-3.5 text-indigo-400"></i>
+                                        <span>Metadata</span>
+                                    </button>
+
                                     <span :class="{
                                         'bg-slate-800 text-slate-400': file.status === 'pending',
                                         'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse': file.status === 'uploading',
@@ -405,6 +413,115 @@
         </div>
     </div>
 
+    <!-- Full Library Classification & Metadata Modal -->
+    <div x-show="openMetaModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm" style="display: none;">
+        <div @click.away="openMetaModal = false" class="glass-panel w-full max-w-2xl rounded-2xl p-6 border border-slate-800 space-y-6 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+                        <i data-lucide="book-open" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-white">Library Classification & Dublin Core Metadata</h3>
+                        <p class="text-[11px] text-slate-400" x-text="currentEditingFile ? currentEditingFile.filename : ''"></p>
+                    </div>
+                </div>
+                <button @click="openMetaModal = false" class="text-slate-400 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <template x-if="currentEditingFile">
+                <div class="space-y-4 text-xs">
+                    <!-- Title & Author -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">Title <span class="text-rose-400">*</span></label>
+                            <input type="text" x-model="currentEditingFile.title" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. Introduction to Algorithms">
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">Author(s) / Contributors</label>
+                            <input type="text" x-model="currentEditingFile.author" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. Cormen, Thomas H.; Leiserson, Charles">
+                        </div>
+                    </div>
+
+                    <!-- Doc Type & Classification / Subject -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">Document Type (`dc.type`)</label>
+                            <select x-model="currentEditingFile.doc_type" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none">
+                                <option value="Book">Book</option>
+                                <option value="Thesis">Thesis / Dissertation</option>
+                                <option value="Journal Article">Journal Article</option>
+                                <option value="Technical Report">Technical Report</option>
+                                <option value="Conference Paper">Conference Proceeding</option>
+                                <option value="Monograph">Monograph</option>
+                                <option value="Working Paper">Working Paper</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">Classification / Subject / Call No. (`dc.subject`)</label>
+                            <input type="text" x-model="currentEditingFile.subject" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. 005.133, QA76.73, Computer Science">
+                        </div>
+                    </div>
+
+                    <!-- Year, Publisher & ISBN -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">Year / Date Issued (`dc.date.issued`)</label>
+                            <input type="text" x-model="currentEditingFile.date" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. 2026 or 2026-05">
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">Publisher (`dc.publisher`)</label>
+                            <input type="text" x-model="currentEditingFile.publisher" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. MIT Press, McGraw-Hill">
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">ISBN / Identifier</label>
+                            <input type="text" x-model="currentEditingFile.isbn" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. 978-0262033848">
+                        </div>
+                    </div>
+
+                    <!-- Language & Department -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">Language (`dc.language.iso`)</label>
+                            <select x-model="currentEditingFile.language" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none">
+                                <option value="en">English (en)</option>
+                                <option value="fr">French (fr)</option>
+                                <option value="de">German (de)</option>
+                                <option value="es">Spanish (es)</option>
+                                <option value="ar">Arabic (ar)</option>
+                                <option value="yo">Yoruba (yo)</option>
+                                <option value="ha">Hausa (ha)</option>
+                                <option value="ig">Igbo (ig)</option>
+                                <option value="zh">Chinese (zh)</option>
+                                <option value="pt">Portuguese (pt)</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="space-y-1.5">
+                            <label class="font-semibold text-slate-300">Department / Faculty Category</label>
+                            <input type="text" x-model="currentEditingFile.department" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. Computer Science">
+                        </div>
+                    </div>
+
+                    <!-- Abstract / Description -->
+                    <div class="space-y-1.5">
+                        <label class="font-semibold text-slate-300">Abstract / Summary (`dc.description.abstract`)</label>
+                        <textarea x-model="currentEditingFile.abstract" rows="3" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none resize-none" placeholder="Enter book synopsis or chapter outline..."></textarea>
+                    </div>
+
+                    <div class="pt-2 flex items-center justify-end gap-3">
+                        <button @click="openMetaModal = false" class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-300 transition">
+                            Done
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
     <!-- Footer -->
     <footer class="mt-auto border-t border-slate-800/60 py-6 text-center text-xs text-slate-400 tracking-wider">
         <p>&copy; Ekunstech 2026</p>
@@ -416,6 +533,8 @@
             return {
                 openConfigModal: false,
                 openCollectionModal: false,
+                openMetaModal: false,
+                currentEditingFile: null,
                 isLoadingCollections: false,
                 isUploading: false,
                 concurrencyLimit: 3,
@@ -441,6 +560,12 @@
                     lucide.createIcons();
                     await this.loadConfigs();
                     await this.fetchHistory();
+                },
+
+                openMetadataModal(file, index) {
+                    this.currentEditingFile = file;
+                    this.openMetaModal = true;
+                    this.$nextTick(() => lucide.createIcons());
                 },
 
                 async loadConfigs() {
@@ -514,6 +639,13 @@
 
                         let title = file.name.replace(/\.[^/.]+$/, "");
                         let author = "";
+                        let subject = "";
+                        let publisher = "";
+                        let date = "";
+                        let doc_type = "Book";
+                        let language = "en";
+                        let abstract = "";
+                        let isbn = "";
 
                         // Client-side PDF Metadata Extraction with PDF.js
                         if (file.name.toLowerCase().endsWith('.pdf')) {
@@ -524,6 +656,13 @@
                                 if (meta && meta.info) {
                                     if (meta.info.Title) title = meta.info.Title;
                                     if (meta.info.Author) author = meta.info.Author;
+                                    if (meta.info.Subject) subject = meta.info.Subject;
+                                    if (meta.info.Keywords) subject = subject ? `${subject}, ${meta.info.Keywords}` : meta.info.Keywords;
+                                    if (meta.info.Publisher || meta.info.Producer) publisher = meta.info.Publisher || meta.info.Producer;
+                                    if (meta.info.CreationDate) {
+                                        const m = String(meta.info.CreationDate).match(/D:(\d{4})/);
+                                        if (m) date = m[1];
+                                    }
                                 }
                             } catch (err) {
                                 console.warn("Client PDF extract warning:", err);
@@ -535,7 +674,13 @@
                             filename: file.name,
                             title: title,
                             author: author,
-                            isbn: '',
+                            isbn: isbn,
+                            doc_type: doc_type,
+                            subject: subject,
+                            publisher: publisher,
+                            date: date,
+                            language: language,
+                            abstract: abstract,
                             department: this.targetDepartment,
                             file_size: file.size,
                             status: 'pending'
@@ -570,7 +715,13 @@
                                     title: item.title,
                                     author: item.author,
                                     isbn: item.isbn,
-                                    department: this.targetDepartment,
+                                    doc_type: item.doc_type || 'Book',
+                                    subject: item.subject || '',
+                                    publisher: item.publisher || '',
+                                    date: item.date || '',
+                                    language: item.language || 'en',
+                                    abstract: item.abstract || '',
+                                    department: item.department || this.targetDepartment,
                                     filename: item.filename,
                                     file_size: item.file_size
                                 }));
