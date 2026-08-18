@@ -27,8 +27,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Dancing+Script:wght@700&display=swap" rel="stylesheet">
+    <!-- PWA Manifest & App Icons -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#4f46e5">
+
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- JSZip for Client-Side EPUB Metadata Extraction -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <!-- PDF.js for Client-Side PDF Metadata Extraction -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>
@@ -220,6 +226,9 @@
                                             </span>
                                             <span class="px-2 py-0.5 rounded bg-slate-800 text-[10px] text-indigo-300 font-semibold" x-text="file.doc_type || 'Book'"></span>
                                             <span x-show="file.date" class="px-2 py-0.5 rounded bg-slate-800 text-[10px] text-amber-300 font-mono" x-text="file.date"></span>
+                                            <span x-show="file.is_duplicate" class="px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] font-semibold flex items-center gap-1" title="Already exists in D1 logs">
+                                                <i data-lucide="alert-triangle" class="w-3 h-3"></i> Duplicate
+                                            </span>
                                             <span class="text-slate-500" x-text="formatBytes(file.file_size)"></span>
                                         </div>
                                     </div>
@@ -310,10 +319,16 @@
                     </h3>
                     <p class="text-xs text-slate-400">Persisted logs stored at edge database.</p>
                 </div>
-                <button @click="fetchHistory()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition">
-                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
-                    Refresh
-                </button>
+                <div class="flex items-center gap-2">
+                    <button @click="exportHistoryCSV()" :disabled="historyLogs.length === 0" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 text-xs font-semibold text-indigo-300 transition disabled:opacity-40">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                        Export CSV
+                    </button>
+                    <button @click="fetchHistory()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                        Refresh
+                    </button>
+                </div>
             </div>
 
             <div class="overflow-x-auto custom-scrollbar">
@@ -572,6 +587,9 @@
 
                 async initApp() {
                     lucide.createIcons();
+                    if ('serviceWorker' in navigator) {
+                        navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW registration error:', err));
+                    }
                     await this.loadConfigs();
                     await this.fetchHistory();
                 },
@@ -646,7 +664,7 @@
                     this.openCollectionModal = false;
                 },
 
-                // Intelligent Offline Heuristic & PDF Text Autodetector
+                // Intelligent Offline Heuristic, EPUB & PDF Text Autodetector
                 async autoDetectMetadata(file) {
                     const cleanBaseName = file.name.replace(/\.[^/.]+$/, "").replace(/[_\.]+/g, " ").trim();
                     let title = cleanBaseName;
@@ -659,7 +677,7 @@
                     let language = "en";
                     let abstract = "";
 
-                    // 1. Filename Pattern Parsing (e.g. "Author - Title (2023) [978-0123456789]")
+                    // 1. Filename Pattern Parsing
                     const yearMatch = cleanBaseName.match(/\b(19\d{2}|20\d{2})\b/);
                     if (yearMatch) date = yearMatch[1];
 
@@ -674,7 +692,6 @@
                         }
                     }
 
-                    // Known academic & technical publishers for offline signature matching
                     const KNOWN_PUBLISHERS = [
                         "O'Reilly", "Springer", "MIT Press", "Cambridge University Press", 
                         "Oxford University Press", "Wiley", "John Wiley & Sons", "McGraw-Hill", 
@@ -691,20 +708,55 @@
                         }
                     }
 
-                    // Document Type heuristic from filename
                     const lowerName = cleanBaseName.toLowerCase();
                     if (lowerName.includes("thesis") || lowerName.includes("dissertation")) doc_type = "Thesis";
                     else if (lowerName.includes("journal") || lowerName.includes("article")) doc_type = "Journal Article";
                     else if (lowerName.includes("conference") || lowerName.includes("proceeding")) doc_type = "Conference Paper";
                     else if (lowerName.includes("report") || lowerName.includes("manual")) doc_type = "Technical Report";
 
-                    // 2. Deep PDF Metadata & First Pages Text Extraction (Offline)
+                    // 2A. EPUB Metadata Extraction via JSZip
+                    if (file.name.toLowerCase().endsWith('.epub') && typeof JSZip !== 'undefined') {
+                        try {
+                            const zip = await JSZip.loadAsync(file);
+                            const containerXml = await zip.file("META-INF/container.xml")?.async("string");
+                            let opfPath = "content.opf";
+                            if (containerXml) {
+                                const m = containerXml.match(/full-path="([^"]+)"/);
+                                if (m) opfPath = m[1];
+                            }
+                            const opfContent = await zip.file(opfPath)?.async("string");
+                            if (opfContent) {
+                                const getTag = (t) => {
+                                    const m = opfContent.match(new RegExp(`<dc:${t}[^>]*>([^<]+)<\/dc:${t}>`, 'i'));
+                                    return m ? m[1].trim() : '';
+                                };
+                                if (getTag('title')) title = getTag('title');
+                                if (getTag('creator')) author = getTag('creator');
+                                if (getTag('publisher')) publisher = getTag('publisher');
+                                if (getTag('date')) {
+                                    const ym = getTag('date').match(/\b(19\d{2}|20\d{2})\b/);
+                                    if (ym) date = ym[1];
+                                }
+                                if (getTag('identifier')) {
+                                    const idVal = getTag('identifier');
+                                    const im = idVal.match(/(?:97[89][\d-]{10,14}[\dX]|\b\d{9}[\dX]\b)/i);
+                                    if (im) isbn = im[0].replace(/[^0-9X-]/gi, "");
+                                }
+                                if (getTag('language')) language = getTag('language');
+                                if (getTag('description')) abstract = getTag('description');
+                                if (getTag('subject')) subject = getTag('subject');
+                            }
+                        } catch (epubErr) {
+                            console.warn("EPUB parse warning:", epubErr);
+                        }
+                    }
+
+                    // 2B. Deep PDF Metadata & Text Extraction via PDF.js
                     if (file.name.toLowerCase().endsWith('.pdf')) {
                         try {
                             const arrayBuffer = await file.arrayBuffer();
                             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                             
-                            // A. Header Metadata Dictionary
                             const meta = await pdf.getMetadata().catch(() => null);
                             if (meta && meta.info) {
                                 if (meta.info.Title && meta.info.Title.trim().length > 2 && !meta.info.Title.toLowerCase().endsWith('.pdf')) {
@@ -735,32 +787,25 @@
                                 }
                             }
 
-                            // B. Text Scanning of Title / Copyright Page (Pages 1 & 2)
                             const maxPagesToScan = Math.min(pdf.numPages, 3);
                             let combinedText = "";
                             for (let pageNum = 1; pageNum <= maxPagesToScan; pageNum++) {
                                 try {
                                     const page = await pdf.getPage(pageNum);
                                     const textContent = await page.getTextContent();
-                                    const pageText = textContent.items.map(i => i.str).join(" ");
-                                    combinedText += " " + pageText;
+                                    combinedText += " " + textContent.items.map(i => i.str).join(" ");
                                 } catch (pErr) {}
                             }
 
                             if (combinedText) {
-                                // Extract ISBN from page text if not found
                                 if (!isbn) {
                                     const textIsbnMatch = combinedText.match(/(?:ISBN(?:-1[03])?:?\s*)(97[89][\d-]{10,14}[\dX]|\d{9}[\dX])/i);
                                     if (textIsbnMatch) isbn = textIsbnMatch[1].replace(/[^0-9X-]/gi, "");
                                 }
-
-                                // Extract Copyright Year from page text
                                 if (!date) {
                                     const copyrightMatch = combinedText.match(/(?:copyright|published|edition|©)\s*(?:by\s*)?(?:[a-zA-Z\s,]+)?\b(19\d{2}|20\d{2})\b/i);
                                     if (copyrightMatch) date = copyrightMatch[1];
                                 }
-
-                                // Detect Publisher from page text
                                 if (!publisher) {
                                     for (const pub of KNOWN_PUBLISHERS) {
                                         if (new RegExp(`\\b${pub}\\b`, "i").test(combinedText)) {
@@ -769,27 +814,21 @@
                                         }
                                     }
                                 }
-
-                                // Extract Library of Congress / Dewey Call Numbers from text
                                 if (!subject) {
                                     const deweyMatch = combinedText.match(/\bDewey(?:\s*Decimal)?(?:\s*Class(?:ification)?)?:?\s*(\d{3}(?:\.\d+)?)\b/i);
-                                    if (deweyMatch) {
-                                        subject = `DDC: ${deweyMatch[1]}`;
-                                    } else {
+                                    if (deweyMatch) subject = `DDC: ${deweyMatch[1]}`;
+                                    else {
                                         const lcMatch = combinedText.match(/\bLCC(?:N)?:?\s*([A-Z]{1,3}\s*\d{1,4}(?:\.\d+)?)\b/i);
                                         if (lcMatch) subject = `LCC: ${lcMatch[1]}`;
                                     }
                                 }
-
-                                // Detect doc type from text
                                 if (doc_type === "Book") {
                                     if (/thesis|dissertation/i.test(combinedText)) doc_type = "Thesis";
                                     else if (/journal\s+of|volume\s+\d+|issue\s+\d+/i.test(combinedText)) doc_type = "Journal Article";
                                 }
                             }
-
                         } catch (err) {
-                            console.warn("Client PDF auto-detect warning:", err);
+                            console.warn("PDF auto-detect warning:", err);
                         }
                     }
 
@@ -801,8 +840,19 @@
                     for (const file of files) {
                         if (!file.name.toLowerCase().endsWith('.pdf') && !file.name.toLowerCase().endsWith('.epub')) continue;
 
-                        // Execute comprehensive offline auto-detection
                         const autoMeta = await this.autoDetectMetadata(file);
+
+                        // Check duplicate status against D1 upload logs
+                        let is_duplicate = false;
+                        try {
+                            const dupResp = await fetch('/api/check-duplicate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ title: autoMeta.title, isbn: autoMeta.isbn })
+                            });
+                            const dupData = await dupResp.json();
+                            is_duplicate = dupData.is_duplicate || false;
+                        } catch (dErr) {}
 
                         this.stagedFiles.push({
                             rawFile: file,
@@ -819,6 +869,7 @@
                             department: this.targetDepartment,
                             file_size: file.size,
                             selected: true,
+                            is_duplicate: is_duplicate,
                             status: 'pending'
                         });
                     }
@@ -906,7 +957,6 @@
                         }
                     };
 
-                    // Launch concurrent worker pool
                     const workers = Array.from({ length: Math.min(maxConcurrency, pendingItems.length) }, () => runWorker());
                     await Promise.all(workers);
 
@@ -924,6 +974,30 @@
                     } catch (e) {
                         console.error("History fetch error:", e);
                     }
+                },
+
+                exportHistoryCSV() {
+                    if (!this.historyLogs || this.historyLogs.length === 0) return;
+                    const headers = ["ID", "Title", "Filename", "Author", "Department", "DSpace Version", "Status", "Item Identifier", "Date"];
+                    const rows = this.historyLogs.map(l => [
+                        l.id,
+                        `"${(l.title || '').replace(/"/g, '""')}"`,
+                        `"${(l.filename || '').replace(/"/g, '""')}"`,
+                        `"${(l.author || '').replace(/"/g, '""')}"`,
+                        `"${(l.department || '').replace(/"/g, '""')}"`,
+                        l.dspace_version || '',
+                        l.status,
+                        l.item_identifier || '',
+                        l.uploaded_at
+                    ]);
+                    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+                    const encodedUri = encodeURI(csvContent);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", encodedUri);
+                    link.setAttribute("download", `dspace_upload_history_${new Date().toISOString().slice(0,10)}.csv`);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
                 },
 
                 formatBytes(bytes, decimals = 1) {

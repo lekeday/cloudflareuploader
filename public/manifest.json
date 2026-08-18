@@ -1,0 +1,17 @@
+{
+  "name": "DSpace Ebook Uploader - Ekunstech",
+  "short_name": "DSpace Uploader",
+  "description": "High-performance edge batch uploading and metadata classifier for DSpace 6 & 7",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/cloud-lightning.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

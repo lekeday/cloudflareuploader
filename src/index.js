@@ -205,6 +205,35 @@ export default {
         return jsonResponse({ success: false, error: `No metadata found for ISBN ${cleanIsbn}` });
       }
 
+      // 6b. Duplicate Check API (Query D1 upload logs)
+      if (path === "/api/check-duplicate" && method === "POST") {
+        if (!db) return jsonResponse({ is_duplicate: false });
+        const payload = await request.json();
+        const title = (payload.title || "").trim();
+        const isbn = (payload.isbn || "").replace(/[^0-9X-]/gi, "");
+
+        let existing = null;
+        if (isbn && isbn.length >= 9) {
+          existing = await db.prepare("SELECT id, title, filename, item_handle_or_uuid, uploaded_at FROM upload_logs WHERE isbn = ? AND status = 'success' ORDER BY id DESC LIMIT 1").bind(isbn).first();
+        }
+        if (!existing && title.length >= 4) {
+          existing = await db.prepare("SELECT id, title, filename, item_handle_or_uuid, uploaded_at FROM upload_logs WHERE LOWER(title) = LOWER(?) AND status = 'success' ORDER BY id DESC LIMIT 1").bind(title).first();
+        }
+
+        if (existing) {
+          return jsonResponse({
+            is_duplicate: true,
+            existing_item: {
+              id: existing.id,
+              title: existing.title,
+              handle: existing.item_handle_or_uuid,
+              uploaded_at: existing.uploaded_at
+            }
+          });
+        }
+        return jsonResponse({ is_duplicate: false });
+      }
+
       // 7. Upload Single / Bulk Ebook Item
       if (path === "/api/upload-ebook" && method === "POST") {
         const contentType = request.headers.get("content-type") || "";
