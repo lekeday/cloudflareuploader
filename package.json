@@ -4,8 +4,9 @@
   "description": "Serverless DSpace Ebook Uploader powered by Cloudflare Workers, Pages, and D1 Database",
   "main": "src/index.js",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "build": "echo 'Ready'",
+    "dev": "wrangler pages dev public --d1=DB=dspace-db",
+    "deploy": "wrangler pages deploy public",
     "d1:create": "wrangler d1 create dspace-db",
     "d1:init:local": "wrangler d1 execute dspace-db --local --file=schema.sql",
     "d1:init:remote": "wrangler d1 execute dspace-db --remote --file=schema.sql"

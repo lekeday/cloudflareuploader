@@ -3,17 +3,16 @@ main = "src/index.js"
 compatibility_date = "2024-04-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Serve static assets (UI) from public directory
-[assets]
-directory = "./public"
-binding = "ASSETS"
+# Cloudflare Pages / Workers Configuration
+pages_build_output_dir = "public"
 
 # Cloudflare D1 Database binding
-# Replace database_id with your actual D1 ID after running: npx wrangler d1 create dspace-db
-[[d1_databases]]
-binding = "DB"
-database_name = "dspace-db"
-database_id = "local-dspace-db"
+# In Cloudflare Pages Dashboard: Settings -> Functions -> D1 database bindings -> Variable name: DB -> dspace-db
+# In Wrangler Workers CLI: uncomment and put your actual database_id from 'wrangler d1 create dspace-db'
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "dspace-db"
+# database_id = "<YOUR_D1_DATABASE_ID>"
 
 # Environment variables
 [vars]
