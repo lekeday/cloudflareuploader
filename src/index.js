@@ -48,7 +48,7 @@ export default {
       if (path === "/api/health" && method === "GET") {
         return jsonResponse({ 
           status: "healthy", 
-          engine: "cloudflare-workers-d1", 
+          engine: "ekunstech-edge-d1", 
           r2_available: Boolean(env.BUCKET || env.R2_BUCKET),
           timestamp: new Date().toISOString() 
         });
