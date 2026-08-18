@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DSpace Ebook Uploader (Serverless D1 Edition)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Dancing+Script:wght@700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- PDF.js for Client-Side PDF Metadata Extraction -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+    <!-- Alpine.js -->
+    <script defer src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.2);
+            border-radius: 9999px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(148, 163, 184, 0.4);
+        }
+    </style>
+</head>
+<body class="min-h-full flex flex-col bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white" x-data="dspaceApp()" x-init="initApp()">
+
+    <!-- Top Navigation Bar -->
+    <header class="glass-panel sticky top-0 z-30 border-b border-slate-800/80 px-6 py-4">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-amber-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                    <i data-lucide="cloud-lightning" class="w-5 h-5 text-white"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="font-bold text-lg text-white tracking-tight">DSpace Ebook Uploader</span>
+                        <span class="px-2 py-0.5 text-xs font-semibold rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">Cloudflare D1 Serverless</span>
+                    </div>
+                    <p class="text-xs text-slate-400">High-performance edge batch uploading for DSpace 6 & 7</p>
+                </div>
+            </div>
+
+            <!-- Header Actions -->
+            <div class="flex items-center gap-3">
+                <!-- DSpace Config Badge / Selector -->
+                <button @click="openConfigModal = true" class="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-sm font-medium text-slate-300 hover:text-white transition">
+                    <i data-lucide="database" class="w-4 h-4 text-indigo-400"></i>
+                    <span x-text="activeConfig ? activeConfig.name : 'Configure DSpace'"></span>
+                    <span class="px-1.5 py-0.5 text-[10px] font-bold uppercase rounded bg-slate-800 text-slate-400" x-text="activeConfig ? activeConfig.detected_version : 'none'"></span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-6 py-8 space-y-8">
+
+        <!-- Top Status Banner & Metric Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="glass-panel rounded-2xl p-5 border border-slate-800/80 flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+                    <i data-lucide="files" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <div class="text-2xl font-bold text-white" x-text="stagedFiles.length">0</div>
+                    <div class="text-xs text-slate-400 font-medium">Staged Ebooks</div>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-2xl p-5 border border-slate-800/80 flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+                    <i data-lucide="check-circle-2" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <div class="text-2xl font-bold text-white" x-text="uploadedCount">0</div>
+                    <div class="text-xs text-slate-400 font-medium">Uploaded Successfully</div>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-2xl p-5 border border-slate-800/80 flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-400">
+                    <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <div class="text-2xl font-bold text-white" x-text="failedCount">0</div>
+                    <div class="text-xs text-slate-400 font-medium">Failed Uploads</div>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-2xl p-5 border border-slate-800/80 flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400">
+                    <i data-lucide="layers" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <div class="text-2xl font-bold text-white" x-text="selectedCollection ? selectedCollection.name : 'None'">None</div>
+                    <div class="text-xs text-slate-400 font-medium truncate max-w-[140px]">Target Collection</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Staging & Upload Dashboard -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Left 2 Cols: Staging File List & Folder Scanner -->
+            <div class="lg:col-span-2 space-y-6">
+                <div class="glass-panel rounded-2xl p-6 border border-slate-800/80 space-y-6">
+                    <div class="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800/60">
+                        <div>
+                            <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                                <i data-lucide="folder-search" class="w-5 h-5 text-indigo-400"></i>
+                                Ebook Staging Area
+                            </h2>
+                            <p class="text-xs text-slate-400">Select files or whole folder. Metadata is parsed client-side instantly.</p>
+                        </div>
+
+                        <!-- Scan & Add Actions -->
+                        <div class="flex items-center gap-2">
+                            <!-- Hidden Folder Picker -->
+                            <input type="file" id="folderInput" webkitdirectory directory multiple class="hidden" @change="handleFilesSelected($event)">
+                            <button @click="document.getElementById('folderInput').click()" class="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 transition">
+                                <i data-lucide="folder" class="w-4 h-4"></i>
+                                Browse Folder
+                            </button>
+
+                            <!-- Hidden Files Picker -->
+                            <input type="file" id="filesInput" multiple accept=".pdf,.epub" class="hidden" @change="handleFilesSelected($event)">
+                            <button @click="document.getElementById('filesInput').click()" class="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-sm font-medium text-slate-300 hover:text-white transition">
+                                <i data-lucide="file-plus" class="w-4 h-4 text-slate-400"></i>
+                                Add Files
+                            </button>
+
+                            <button x-show="stagedFiles.length > 0" @click="stagedFiles = []" class="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-rose-950/40 text-xs font-semibold text-rose-400 transition">
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Staged List / Empty State -->
+                    <div class="space-y-3 max-h-[450px] overflow-y-auto custom-scrollbar pr-1">
+                        <template x-if="stagedFiles.length === 0">
+                            <div class="border-2 border-dashed border-slate-800/80 rounded-2xl p-12 text-center space-y-3">
+                                <div class="w-12 h-12 mx-auto rounded-full bg-slate-900 flex items-center justify-center text-slate-500">
+                                    <i data-lucide="upload-cloud" class="w-6 h-6"></i>
+                                </div>
+                                <div class="text-sm font-medium text-slate-300">No ebooks staged yet</div>
+                                <p class="text-xs text-slate-500 max-w-sm mx-auto">Click "Browse Folder" to stage and extract metadata from your entire PDF collection.</p>
+                            </div>
+                        </template>
+
+                        <template x-for="(file, index) in stagedFiles" :key="index">
+                            <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800/70 hover:border-slate-700 transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                                <div class="flex items-start gap-3 flex-1 min-w-0">
+                                    <div class="w-10 h-10 rounded-lg bg-indigo-500/10 flex-shrink-0 flex items-center justify-center text-indigo-400">
+                                        <i data-lucide="file-text" class="w-5 h-5"></i>
+                                    </div>
+                                    <div class="min-w-0 flex-1">
+                                        <input type="text" x-model="file.title" class="w-full bg-transparent border-b border-transparent hover:border-slate-700 focus:border-indigo-500 px-1 py-0.5 text-sm font-bold text-white outline-none" placeholder="Title">
+                                        <div class="flex flex-wrap items-center gap-3 text-xs text-slate-400 mt-1">
+                                            <span class="flex items-center gap-1">
+                                                <i data-lucide="user" class="w-3.5 h-3.5 text-slate-500"></i>
+                                                <input type="text" x-model="file.author" class="bg-transparent border-b border-transparent hover:border-slate-700 focus:border-indigo-500 px-1 py-0.5 text-xs text-slate-300 outline-none w-28" placeholder="Author">
+                                            </span>
+                                            <span class="flex items-center gap-1">
+                                                <i data-lucide="bookmark" class="w-3.5 h-3.5 text-slate-500"></i>
+                                                <input type="text" x-model="file.isbn" class="bg-transparent border-b border-transparent hover:border-slate-700 focus:border-indigo-500 px-1 py-0.5 text-xs text-slate-300 outline-none w-24" placeholder="ISBN">
+                                            </span>
+                                            <span class="text-slate-500" x-text="formatBytes(file.file_size)"></span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center gap-2 flex-shrink-0">
+                                    <span :class="{
+                                        'bg-slate-800 text-slate-400': file.status === 'pending',
+                                        'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse': file.status === 'uploading',
+                                        'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20': file.status === 'success',
+                                        'bg-rose-500/10 text-rose-400 border border-rose-500/20': file.status === 'failed'
+                                    }" class="px-2.5 py-1 text-xs font-semibold rounded-full capitalize" x-text="file.status"></span>
+
+                                    <button @click="stagedFiles.splice(index, 1)" class="p-1.5 rounded-lg hover:bg-rose-950/40 text-slate-500 hover:text-rose-400 transition">
+                                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Col: Target Collection & Upload Control -->
+            <div class="space-y-6">
+                <div class="glass-panel rounded-2xl p-6 border border-slate-800/80 space-y-6">
+                    <div>
+                        <h3 class="text-base font-bold text-white flex items-center gap-2">
+                            <i data-lucide="send" class="w-5 h-5 text-indigo-400"></i>
+                            Destination & Batch Launch
+                        </h3>
+                        <p class="text-xs text-slate-400">Select target collection and dispatch uploads to DSpace.</p>
+                    </div>
+
+                    <!-- Target Collection Selector -->
+                    <div class="space-y-2">
+                        <label class="text-xs font-semibold text-slate-300">Target DSpace Collection</label>
+                        <div class="flex items-center gap-2">
+                            <input type="text" x-model="targetCollectionId" class="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:border-indigo-500 outline-none" placeholder="Collection UUID or Handle">
+                            <button @click="openCollectionModal = true; loadCollections()" class="px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition">
+                                Pick
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Department Tag -->
+                    <div class="space-y-2">
+                        <label class="text-xs font-semibold text-slate-300">Department / Category</label>
+                        <input type="text" x-model="targetDepartment" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. Computer Science, Medical, General">
+                    </div>
+
+                    <!-- Batch Upload Button -->
+                    <button @click="startBatchUpload()" :disabled="isUploading || stagedFiles.length === 0 || !targetCollectionId" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed font-bold text-sm text-white shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition">
+                        <i data-lucide="upload" class="w-4 h-4" x-show="!isUploading"></i>
+                        <svg x-show="isUploading" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span x-text="isUploading ? 'Uploading Batch...' : `Upload ${stagedFiles.length} Ebooks`"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload History Table (Fetched from D1) -->
+        <div class="glass-panel rounded-2xl p-6 border border-slate-800/80 space-y-4">
+            <div class="flex items-center justify-between pb-4 border-b border-slate-800/60">
+                <div>
+                    <h3 class="text-base font-bold text-white flex items-center gap-2">
+                        <i data-lucide="history" class="w-5 h-5 text-indigo-400"></i>
+                        Cloudflare D1 Upload History
+                    </h3>
+                    <p class="text-xs text-slate-400">Persisted logs stored at edge in Cloudflare D1.</p>
+                </div>
+                <button @click="fetchHistory()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                    Refresh
+                </button>
+            </div>
+
+            <div class="overflow-x-auto custom-scrollbar">
+                <table class="w-full text-left text-xs">
+                    <thead>
+                        <tr class="text-slate-400 border-b border-slate-800/60">
+                            <th class="py-3 px-4 font-semibold">Title / Filename</th>
+                            <th class="py-3 px-4 font-semibold">Author</th>
+                            <th class="py-3 px-4 font-semibold">Department</th>
+                            <th class="py-3 px-4 font-semibold">Status</th>
+                            <th class="py-3 px-4 font-semibold">DSpace Item Identifier</th>
+                            <th class="py-3 px-4 font-semibold">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800/40">
+                        <template x-if="historyLogs.length === 0">
+                            <tr>
+                                <td colspan="6" class="py-8 text-center text-slate-500">No logs found in D1 database yet.</td>
+                            </tr>
+                        </template>
+                        <template x-for="log in historyLogs" :key="log.id">
+                            <tr class="hover:bg-slate-900/40 transition">
+                                <td class="py-3 px-4 font-medium text-white max-w-xs truncate" x-text="log.title || log.filename"></td>
+                                <td class="py-3 px-4 text-slate-300" x-text="log.author || '—'"></td>
+                                <td class="py-3 px-4 text-slate-400" x-text="log.department"></td>
+                                <td class="py-3 px-4">
+                                    <span :class="{
+                                        'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20': log.status === 'success',
+                                        'bg-rose-500/10 text-rose-400 border border-rose-500/20': log.status === 'failed'
+                                    }" class="px-2 py-0.5 text-[11px] font-semibold rounded-full capitalize" x-text="log.status"></span>
+                                </td>
+                                <td class="py-3 px-4 text-slate-400 font-mono text-[11px]" x-text="log.item_identifier || '—'"></td>
+                                <td class="py-3 px-4 text-slate-500" x-text="log.uploaded_at"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- DSpace Config Modal -->
+    <div x-show="openConfigModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm" style="display: none;">
+        <div @click.away="openConfigModal = false" class="glass-panel w-full max-w-md rounded-2xl p-6 border border-slate-800 space-y-6 shadow-2xl">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <i data-lucide="settings" class="w-5 h-5 text-indigo-400"></i>
+                    DSpace Repository Connection
+                </h3>
+                <button @click="openConfigModal = false" class="text-slate-400 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="space-y-4">
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Repository Name</label>
+                    <input type="text" x-model="configForm.name" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="e.g. University Repository">
+                </div>
+
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Base DSpace URL</label>
+                    <input type="url" x-model="configForm.url" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="https://dspace.example.com">
+                </div>
+
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Username / Submitter Email</label>
+                    <input type="text" x-model="configForm.username" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="admin@dspace.org">
+                </div>
+
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Password / Token</label>
+                    <input type="password" x-model="configForm.password" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="••••••••">
+                </div>
+
+                <button @click="saveAndDetectConfig()" class="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-bold text-white shadow-lg shadow-indigo-600/20 transition">
+                    Save to D1 & Detect Version
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Collection Picker Modal -->
+    <div x-show="openCollectionModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm" style="display: none;">
+        <div @click.away="openCollectionModal = false" class="glass-panel w-full max-w-lg rounded-2xl p-6 border border-slate-800 space-y-4 shadow-2xl">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <i data-lucide="layers" class="w-5 h-5 text-indigo-400"></i>
+                    Select DSpace Collection
+                </h3>
+                <button @click="openCollectionModal = false" class="text-slate-400 hover:text-white">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="max-h-80 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                <template x-if="isLoadingCollections">
+                    <div class="py-12 text-center text-slate-400">Loading collections from DSpace...</div>
+                </template>
+                <template x-for="col in collectionsList" :key="col.uuid || col.handle">
+                    <div @click="selectCollection(col)" class="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-indigo-500/50 hover:bg-indigo-500/10 cursor-pointer transition flex items-center justify-between">
+                        <div>
+                            <div class="font-bold text-sm text-white" x-text="col.name"></div>
+                            <div class="text-xs text-slate-400" x-text="col.community_name || 'General Collection'"></div>
+                        </div>
+                        <span class="text-xs font-mono text-indigo-400" x-text="col.uuid || col.handle"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="mt-auto border-t border-slate-800/60 py-6 text-center text-xs text-slate-500">
+        <p>Built with Cloudflare Workers, Pages, and D1 Database.</p>
+        <p class="font-['Dancing_Script'] text-base text-slate-400 mt-1">Leke</p>
+    </footer>
+
+    <!-- Alpine App Logic -->
+    <script>
+        function dspaceApp() {
+            return {
+                openConfigModal: false,
+                openCollectionModal: false,
+                isLoadingCollections: false,
+                isUploading: false,
+                activeConfig: null,
+                targetCollectionId: '',
+                targetDepartment: 'General',
+                selectedCollection: null,
+                stagedFiles: [],
+                collectionsList: [],
+                historyLogs: [],
+                uploadedCount: 0,
+                failedCount: 0,
+
+                configForm: {
+                    name: 'Main Repository',
+                    url: 'https://dspace.example.com',
+                    username: '',
+                    password: ''
+                },
+
+                async initApp() {
+                    lucide.createIcons();
+                    await this.loadConfigs();
+                    await this.fetchHistory();
+                },
+
+                async loadConfigs() {
+                    try {
+                        const resp = await fetch('/api/configs');
+                        const data = await resp.json();
+                        if (data.success && data.configs?.length > 0) {
+                            this.activeConfig = data.configs[0];
+                            this.configForm.name = this.activeConfig.name;
+                            this.configForm.url = this.activeConfig.url;
+                            this.configForm.username = this.activeConfig.username;
+                        }
+                    } catch (e) {
+                        console.error("Config fetch error:", e);
+                    }
+                },
+
+                async saveAndDetectConfig() {
+                    try {
+                        const resp = await fetch('/api/configs', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.configForm)
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            this.activeConfig = data.config;
+                            // Detect version
+                            const detResp = await fetch('/api/detect-version', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ config_id: this.activeConfig.id, url: this.activeConfig.url })
+                            });
+                            const detData = await detResp.json();
+                            this.activeConfig.detected_version = detData.version || 'unknown';
+                            this.openConfigModal = false;
+                            alert(`Connected! DSpace Version: ${this.activeConfig.detected_version}`);
+                        }
+                    } catch (e) {
+                        alert(`Failed to save config: ${e.message}`);
+                    }
+                },
+
+                async loadCollections() {
+                    this.isLoadingCollections = true;
+                    try {
+                        const resp = await fetch('/api/fetch-collections', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ config_id: this.activeConfig?.id, url: this.activeConfig?.url })
+                        });
+                        const data = await resp.json();
+                        this.collectionsList = data.collections || [];
+                    } catch (e) {
+                        console.error(e);
+                    } finally {
+                        this.isLoadingCollections = false;
+                    }
+                },
+
+                selectCollection(col) {
+                    this.selectedCollection = col;
+                    this.targetCollectionId = col.uuid || col.handle;
+                    this.openCollectionModal = false;
+                },
+
+                async handleFilesSelected(event) {
+                    const files = Array.from(event.target.files);
+                    for (const file of files) {
+                        if (!file.name.toLowerCase().endsWith('.pdf') && !file.name.toLowerCase().endsWith('.epub')) continue;
+
+                        let title = file.name.replace(/\.[^/.]+$/, "");
+                        let author = "";
+
+                        // Client-side PDF Metadata Extraction with PDF.js!
+                        if (file.name.toLowerCase().endsWith('.pdf')) {
+                            try {
+                                const arrayBuffer = await file.arrayBuffer();
+                                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                                const meta = await pdf.getMetadata();
+                                if (meta && meta.info) {
+                                    if (meta.info.Title) title = meta.info.Title;
+                                    if (meta.info.Author) author = meta.info.Author;
+                                }
+                            } catch (err) {
+                                console.warn("Client PDF extract warning:", err);
+                            }
+                        }
+
+                        this.stagedFiles.push({
+                            rawFile: file,
+                            filename: file.name,
+                            title: title,
+                            author: author,
+                            isbn: '',
+                            department: this.targetDepartment,
+                            file_size: file.size,
+                            status: 'pending'
+                        });
+                    }
+                    this.$nextTick(() => lucide.createIcons());
+                },
+
+                async startBatchUpload() {
+                    if (this.stagedFiles.length === 0 || !this.targetCollectionId) return;
+                    this.isUploading = true;
+
+                    for (const item of this.stagedFiles) {
+                        if (item.status === 'success') continue;
+                        item.status = 'uploading';
+
+                        try {
+                            const formData = new FormData();
+                            formData.append('file', item.rawFile);
+                            formData.append('metadata', JSON.stringify({
+                                config_id: this.activeConfig?.id,
+                                url: this.activeConfig?.url,
+                                collection_identifier: this.targetCollectionId,
+                                version: this.activeConfig?.detected_version || 'v7',
+                                title: item.title,
+                                author: item.author,
+                                isbn: item.isbn,
+                                department: this.targetDepartment,
+                                filename: item.filename,
+                                file_size: item.file_size
+                            }));
+
+                            const resp = await fetch('/api/upload-ebook', {
+                                method: 'POST',
+                                body: formData
+                            });
+
+                            const resData = await resp.json();
+                            if (resp.ok && resData.success) {
+                                item.status = 'success';
+                                this.uploadedCount++;
+                            } else {
+                                item.status = 'failed';
+                                this.failedCount++;
+                            }
+                        } catch (err) {
+                            item.status = 'failed';
+                            this.failedCount++;
+                        }
+                    }
+
+                    this.isUploading = false;
+                    await this.fetchHistory();
+                },
+
+                async fetchHistory() {
+                    try {
+                        const resp = await fetch('/api/history');
+                        const data = await resp.json();
+                        if (data.success) {
+                            this.historyLogs = data.logs || [];
+                        }
+                    } catch (e) {
+                        console.error("History fetch error:", e);
+                    }
+                },
+
+                formatBytes(bytes, decimals = 1) {
+                    if (!bytes) return '0 B';
+                    const k = 1024;
+                    const dm = decimals < 0 ? 0 : decimals;
+                    const sizes = ['B', 'KB', 'MB', 'GB'];
+                    const i = Math.floor(Math.log(bytes) / Math.log(k));
+                    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+                }
+            }
+        }
+    </script>
+</body>
+</html>
