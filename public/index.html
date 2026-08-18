@@ -646,55 +646,176 @@
                     this.openCollectionModal = false;
                 },
 
+                // Intelligent Offline Heuristic & PDF Text Autodetector
+                async autoDetectMetadata(file) {
+                    const cleanBaseName = file.name.replace(/\.[^/.]+$/, "").replace(/[_\.]+/g, " ").trim();
+                    let title = cleanBaseName;
+                    let author = "";
+                    let isbn = "";
+                    let publisher = "";
+                    let date = "";
+                    let doc_type = "Book";
+                    let subject = "";
+                    let language = "en";
+                    let abstract = "";
+
+                    // 1. Filename Pattern Parsing (e.g. "Author - Title (2023) [978-0123456789]")
+                    const yearMatch = cleanBaseName.match(/\b(19\d{2}|20\d{2})\b/);
+                    if (yearMatch) date = yearMatch[1];
+
+                    const isbnMatch = cleanBaseName.match(/(?:97[89][\d-]{10,14}[\dX]|\b\d{9}[\dX]\b)/i);
+                    if (isbnMatch) isbn = isbnMatch[0].replace(/[^0-9X-]/gi, "");
+
+                    if (cleanBaseName.includes(" - ")) {
+                        const parts = cleanBaseName.split(" - ");
+                        if (parts.length >= 2) {
+                            author = parts[0].trim();
+                            title = parts[1].replace(/\s*\(\d{4}\).*$/, "").replace(/\s*\[.*?\]/g, "").trim();
+                        }
+                    }
+
+                    // Known academic & technical publishers for offline signature matching
+                    const KNOWN_PUBLISHERS = [
+                        "O'Reilly", "Springer", "MIT Press", "Cambridge University Press", 
+                        "Oxford University Press", "Wiley", "John Wiley & Sons", "McGraw-Hill", 
+                        "Pearson", "Elsevier", "Routledge", "Packt", "Academic Press", 
+                        "Apress", "Manning", "No Starch Press", "Harvard University Press", 
+                        "IEEE", "ACM", "Addison-Wesley", "Palgrave Macmillan", "CRC Press", 
+                        "Taylor & Francis", "De Gruyter", "SAGE Publications", "Morgan Kaufmann"
+                    ];
+
+                    for (const pub of KNOWN_PUBLISHERS) {
+                        if (new RegExp(`\\b${pub}\\b`, "i").test(cleanBaseName)) {
+                            publisher = pub;
+                            break;
+                        }
+                    }
+
+                    // Document Type heuristic from filename
+                    const lowerName = cleanBaseName.toLowerCase();
+                    if (lowerName.includes("thesis") || lowerName.includes("dissertation")) doc_type = "Thesis";
+                    else if (lowerName.includes("journal") || lowerName.includes("article")) doc_type = "Journal Article";
+                    else if (lowerName.includes("conference") || lowerName.includes("proceeding")) doc_type = "Conference Paper";
+                    else if (lowerName.includes("report") || lowerName.includes("manual")) doc_type = "Technical Report";
+
+                    // 2. Deep PDF Metadata & First Pages Text Extraction (Offline)
+                    if (file.name.toLowerCase().endsWith('.pdf')) {
+                        try {
+                            const arrayBuffer = await file.arrayBuffer();
+                            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                            
+                            // A. Header Metadata Dictionary
+                            const meta = await pdf.getMetadata().catch(() => null);
+                            if (meta && meta.info) {
+                                if (meta.info.Title && meta.info.Title.trim().length > 2 && !meta.info.Title.toLowerCase().endsWith('.pdf')) {
+                                    title = meta.info.Title.trim();
+                                }
+                                if (meta.info.Author && meta.info.Author.trim().length > 1) {
+                                    author = meta.info.Author.trim();
+                                }
+                                if (meta.info.Subject && meta.info.Subject.trim().length > 2) {
+                                    subject = meta.info.Subject.trim();
+                                }
+                                if (meta.info.Keywords) {
+                                    subject = subject ? `${subject}, ${meta.info.Keywords}` : meta.info.Keywords;
+                                }
+                                if (meta.info.Publisher) {
+                                    publisher = meta.info.Publisher.trim();
+                                } else if (meta.info.Producer && !publisher) {
+                                    for (const pub of KNOWN_PUBLISHERS) {
+                                        if (new RegExp(pub, "i").test(meta.info.Producer)) {
+                                            publisher = pub;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (meta.info.CreationDate && !date) {
+                                    const m = String(meta.info.CreationDate).match(/D:(\d{4})/);
+                                    if (m) date = m[1];
+                                }
+                            }
+
+                            // B. Text Scanning of Title / Copyright Page (Pages 1 & 2)
+                            const maxPagesToScan = Math.min(pdf.numPages, 3);
+                            let combinedText = "";
+                            for (let pageNum = 1; pageNum <= maxPagesToScan; pageNum++) {
+                                try {
+                                    const page = await pdf.getPage(pageNum);
+                                    const textContent = await page.getTextContent();
+                                    const pageText = textContent.items.map(i => i.str).join(" ");
+                                    combinedText += " " + pageText;
+                                } catch (pErr) {}
+                            }
+
+                            if (combinedText) {
+                                // Extract ISBN from page text if not found
+                                if (!isbn) {
+                                    const textIsbnMatch = combinedText.match(/(?:ISBN(?:-1[03])?:?\s*)(97[89][\d-]{10,14}[\dX]|\d{9}[\dX])/i);
+                                    if (textIsbnMatch) isbn = textIsbnMatch[1].replace(/[^0-9X-]/gi, "");
+                                }
+
+                                // Extract Copyright Year from page text
+                                if (!date) {
+                                    const copyrightMatch = combinedText.match(/(?:copyright|published|edition|©)\s*(?:by\s*)?(?:[a-zA-Z\s,]+)?\b(19\d{2}|20\d{2})\b/i);
+                                    if (copyrightMatch) date = copyrightMatch[1];
+                                }
+
+                                // Detect Publisher from page text
+                                if (!publisher) {
+                                    for (const pub of KNOWN_PUBLISHERS) {
+                                        if (new RegExp(`\\b${pub}\\b`, "i").test(combinedText)) {
+                                            publisher = pub;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Extract Library of Congress / Dewey Call Numbers from text
+                                if (!subject) {
+                                    const deweyMatch = combinedText.match(/\bDewey(?:\s*Decimal)?(?:\s*Class(?:ification)?)?:?\s*(\d{3}(?:\.\d+)?)\b/i);
+                                    if (deweyMatch) {
+                                        subject = `DDC: ${deweyMatch[1]}`;
+                                    } else {
+                                        const lcMatch = combinedText.match(/\bLCC(?:N)?:?\s*([A-Z]{1,3}\s*\d{1,4}(?:\.\d+)?)\b/i);
+                                        if (lcMatch) subject = `LCC: ${lcMatch[1]}`;
+                                    }
+                                }
+
+                                // Detect doc type from text
+                                if (doc_type === "Book") {
+                                    if (/thesis|dissertation/i.test(combinedText)) doc_type = "Thesis";
+                                    else if (/journal\s+of|volume\s+\d+|issue\s+\d+/i.test(combinedText)) doc_type = "Journal Article";
+                                }
+                            }
+
+                        } catch (err) {
+                            console.warn("Client PDF auto-detect warning:", err);
+                        }
+                    }
+
+                    return { title, author, isbn, publisher, date, doc_type, subject, language, abstract };
+                },
+
                 async handleFilesSelected(event) {
                     const files = Array.from(event.target.files);
                     for (const file of files) {
                         if (!file.name.toLowerCase().endsWith('.pdf') && !file.name.toLowerCase().endsWith('.epub')) continue;
 
-                        let title = file.name.replace(/\.[^/.]+$/, "");
-                        let author = "";
-                        let subject = "";
-                        let publisher = "";
-                        let date = "";
-                        let doc_type = "Book";
-                        let language = "en";
-                        let abstract = "";
-                        let isbn = "";
-
-                        // Client-side PDF Metadata Extraction with PDF.js
-                        if (file.name.toLowerCase().endsWith('.pdf')) {
-                            try {
-                                const arrayBuffer = await file.arrayBuffer();
-                                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-                                const meta = await pdf.getMetadata();
-                                if (meta && meta.info) {
-                                    if (meta.info.Title) title = meta.info.Title;
-                                    if (meta.info.Author) author = meta.info.Author;
-                                    if (meta.info.Subject) subject = meta.info.Subject;
-                                    if (meta.info.Keywords) subject = subject ? `${subject}, ${meta.info.Keywords}` : meta.info.Keywords;
-                                    if (meta.info.Publisher || meta.info.Producer) publisher = meta.info.Publisher || meta.info.Producer;
-                                    if (meta.info.CreationDate) {
-                                        const m = String(meta.info.CreationDate).match(/D:(\d{4})/);
-                                        if (m) date = m[1];
-                                    }
-                                }
-                            } catch (err) {
-                                console.warn("Client PDF extract warning:", err);
-                            }
-                        }
+                        // Execute comprehensive offline auto-detection
+                        const autoMeta = await this.autoDetectMetadata(file);
 
                         this.stagedFiles.push({
                             rawFile: file,
                             filename: file.name,
-                            title: title,
-                            author: author,
-                            isbn: isbn,
-                            doc_type: doc_type,
-                            subject: subject,
-                            publisher: publisher,
-                            date: date,
-                            language: language,
-                            abstract: abstract,
+                            title: autoMeta.title,
+                            author: autoMeta.author,
+                            isbn: autoMeta.isbn,
+                            doc_type: autoMeta.doc_type,
+                            subject: autoMeta.subject,
+                            publisher: autoMeta.publisher,
+                            date: autoMeta.date,
+                            language: autoMeta.language,
+                            abstract: autoMeta.abstract,
                             department: this.targetDepartment,
                             file_size: file.size,
                             selected: true,
