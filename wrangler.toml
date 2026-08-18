@@ -3,16 +3,10 @@ main = "src/index.js"
 compatibility_date = "2024-04-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Cloudflare Pages / Workers Configuration
-pages_build_output_dir = "public"
-
-# Cloudflare D1 Database binding
-# In Cloudflare Pages Dashboard: Settings -> Functions -> D1 database bindings -> Variable name: DB -> dspace-db
-# In Wrangler Workers CLI: uncomment and put your actual database_id from 'wrangler d1 create dspace-db'
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "dspace-db"
-# database_id = "<YOUR_D1_DATABASE_ID>"
+# Static Assets binding for Cloudflare Workers
+[assets]
+directory = "./public"
+binding = "ASSETS"
 
 # Environment variables
 [vars]
