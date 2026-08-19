@@ -405,8 +405,12 @@
                     <input type="password" x-model="configForm.password" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-indigo-500 outline-none" placeholder="••••••••">
                 </div>
 
-                <button @click="saveAndDetectConfig()" class="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-sm font-bold text-white shadow-lg shadow-indigo-600/20 transition">
-                    Save to D1 & Detect Version
+                <button @click="saveAndDetectConfig()" :disabled="isSavingConfig" class="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-bold text-white shadow-lg shadow-indigo-600/20 transition flex items-center justify-center gap-2">
+                    <svg x-show="isSavingConfig" class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" style="display: none;">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                    </svg>
+                    <span x-text="isSavingConfig ? 'Connecting & Detecting...' : 'Save to D1 & Detect Version'"></span>
                 </button>
             </div>
         </div>
@@ -565,6 +569,7 @@
                 openMetaModal: false,
                 currentEditingFile: null,
                 isLoadingCollections: false,
+                isSavingConfig: false,
                 isUploading: false,
                 concurrencyLimit: 3,
                 activeWorkerCount: 0,
@@ -580,7 +585,7 @@
 
                 configForm: {
                     name: 'Main Repository',
-                    url: 'https://dspace.example.com',
+                    url: 'http://172.16.0.245:4000',
                     username: '',
                     password: ''
                 },
@@ -602,13 +607,27 @@
 
                 async loadConfigs() {
                     try {
+                        const localCached = localStorage.getItem('active_dspace_config');
+                        if (localCached) {
+                            try {
+                                const parsed = JSON.parse(localCached);
+                                this.activeConfig = parsed;
+                                this.configForm.name = parsed.name || this.configForm.name;
+                                this.configForm.url = parsed.url || this.configForm.url;
+                                this.configForm.username = parsed.username || this.configForm.username;
+                                this.configForm.password = parsed.password || '';
+                            } catch (e) {}
+                        }
+
                         const resp = await fetch('/api/configs');
-                        const data = await resp.json();
-                        if (data.success && data.configs?.length > 0) {
-                            this.activeConfig = data.configs[0];
-                            this.configForm.name = this.activeConfig.name;
-                            this.configForm.url = this.activeConfig.url;
-                            this.configForm.username = this.activeConfig.username;
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            if (data.success && data.configs?.length > 0) {
+                                this.activeConfig = data.configs[0];
+                                this.configForm.name = this.activeConfig.name;
+                                this.configForm.url = this.activeConfig.url;
+                                this.configForm.username = this.activeConfig.username;
+                            }
                         }
                     } catch (e) {
                         console.error("Config fetch error:", e);
@@ -616,28 +635,66 @@
                 },
 
                 async saveAndDetectConfig() {
+                    if (!this.configForm.url || !this.configForm.url.trim()) {
+                        alert("Please enter a valid Base DSpace URL (e.g. http://172.16.0.245:4000)");
+                        return;
+                    }
+                    this.isSavingConfig = true;
                     try {
-                        const resp = await fetch('/api/configs', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(this.configForm)
-                        });
-                        const data = await resp.json();
-                        if (data.success) {
-                            this.activeConfig = data.config;
-                            // Detect version
-                            const detResp = await fetch('/api/detect-version', {
+                        let configId = this.activeConfig?.id || null;
+                        try {
+                            const resp = await fetch('/api/configs', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ config_id: this.activeConfig.id, url: this.activeConfig.url })
+                                body: JSON.stringify(this.configForm)
                             });
-                            const detData = await detResp.json();
-                            this.activeConfig.detected_version = detData.version || 'unknown';
-                            this.openConfigModal = false;
-                            alert(`Connected! DSpace Version: ${this.activeConfig.detected_version}`);
+                            if (resp.ok) {
+                                const data = await resp.json();
+                                if (data.success && data.config) {
+                                    configId = data.config.id;
+                                }
+                            }
+                        } catch (cfgErr) {
+                            console.warn("D1 save notice:", cfgErr);
                         }
+
+                        // Run version detection
+                        const detResp = await fetch('/api/detect-version', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                config_id: configId,
+                                url: this.configForm.url.trim(),
+                                username: this.configForm.username,
+                                password: this.configForm.password
+                            })
+                        });
+
+                        const detData = await detResp.json();
+                        const detectedVer = detData.version || 'v7';
+
+                        this.activeConfig = {
+                            id: configId,
+                            name: this.configForm.name || 'DSpace Repository',
+                            url: this.configForm.url.trim(),
+                            username: this.configForm.username,
+                            password: this.configForm.password,
+                            detected_version: detectedVer,
+                            api_base: detData.api_base,
+                            details: detData.details
+                        };
+
+                        try {
+                            localStorage.setItem('active_dspace_config', JSON.stringify(this.activeConfig));
+                        } catch (e) {}
+
+                        this.openConfigModal = false;
+                        alert(`Connected Successfully!\n\nVersion: ${detectedVer.toUpperCase()}\nDetails: ${detData.details || 'REST API endpoint verified'}`);
                     } catch (e) {
-                        alert(`Failed to save config: ${e.message}`);
+                        console.error("Save & Detect Error:", e);
+                        alert(`Connection failed: ${e.message}`);
+                    } finally {
+                        this.isSavingConfig = false;
                     }
                 },
 

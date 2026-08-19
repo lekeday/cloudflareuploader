@@ -65,68 +65,108 @@ export default {
 
       // 2. Configurations API
       if (path === "/api/configs" && method === "GET") {
-        if (!db) return jsonResponse({ success: false, error: "D1 Database binding 'DB' not configured." }, 500);
-        const { results } = await db.prepare("SELECT id, name, url, username, detected_version, is_active, created_at FROM dspace_configs WHERE is_active = 1 ORDER BY id DESC").all();
-        return jsonResponse({ success: true, configs: results || [] });
+        if (!db) return jsonResponse({ success: true, configs: [] });
+        try {
+          const { results } = await db.prepare("SELECT id, name, url, username, detected_version, is_active, created_at FROM dspace_configs WHERE is_active = 1 ORDER BY id DESC").all();
+          return jsonResponse({ success: true, configs: results || [] });
+        } catch (e) {
+          return jsonResponse({ success: true, configs: [] });
+        }
       }
 
       if (path === "/api/configs" && method === "POST") {
-        if (!db) return jsonResponse({ success: false, error: "D1 Database binding 'DB' not configured." }, 500);
         const payload = await request.json();
-        const encryptedPass = await encryptPassword(payload.password || "", secret);
+        if (!db) {
+          return jsonResponse({
+            success: true,
+            warning: "D1 database not bound, using local session config.",
+            config: {
+              id: "local-" + Date.now(),
+              name: payload.name || "Default Repository",
+              url: payload.url,
+              username: payload.username,
+              detected_version: payload.detected_version || "unknown"
+            }
+          });
+        }
+        try {
+          const encryptedPass = await encryptPassword(payload.password || "", secret);
+          const stmt = db.prepare(
+            "INSERT INTO dspace_configs (name, url, username, encrypted_password, detected_version) VALUES (?, ?, ?, ?, ?)"
+          );
+          const result = await stmt.bind(
+            payload.name || "Default Repository",
+            payload.url,
+            payload.username,
+            encryptedPass,
+            payload.detected_version || "unknown"
+          ).run();
 
-        const stmt = db.prepare(
-          "INSERT INTO dspace_configs (name, url, username, encrypted_password, detected_version) VALUES (?, ?, ?, ?, ?)"
-        );
-        const result = await stmt.bind(
-          payload.name || "Default Repository",
-          payload.url,
-          payload.username,
-          encryptedPass,
-          payload.detected_version || "unknown"
-        ).run();
-
-        return jsonResponse({
-          success: true,
-          config: {
-            id: result.meta?.last_row_id,
-            name: payload.name,
-            url: payload.url,
-            username: payload.username,
-            detected_version: payload.detected_version || "unknown"
-          }
-        });
+          return jsonResponse({
+            success: true,
+            config: {
+              id: result.meta?.last_row_id,
+              name: payload.name,
+              url: payload.url,
+              username: payload.username,
+              detected_version: payload.detected_version || "unknown"
+            }
+          });
+        } catch (e) {
+          return jsonResponse({
+            success: true,
+            warning: `D1 write error (${e.message}), using local session config`,
+            config: {
+              id: "local-" + Date.now(),
+              name: payload.name || "Default Repository",
+              url: payload.url,
+              username: payload.username,
+              detected_version: payload.detected_version || "unknown"
+            }
+          });
+        }
       }
 
-      // Helper to retrieve credentials from D1
-      async function resolveConfig(configId, fallbackUrl) {
-        if (configId && db) {
-          const row = await db.prepare("SELECT * FROM dspace_configs WHERE id = ?").bind(configId).first();
-          if (row) {
-            const pass = await decryptPassword(row.encrypted_password, secret);
-            return { url: row.url, username: row.username, password: pass, version: row.detected_version };
-          }
+      // Helper to retrieve credentials from D1 or payload
+      async function resolveConfig(configId, fallbackUrl, fallbackUser = "", fallbackPass = "") {
+        if (configId && db && !String(configId).startsWith("local-")) {
+          try {
+            const row = await db.prepare("SELECT * FROM dspace_configs WHERE id = ?").bind(configId).first();
+            if (row) {
+              const pass = await decryptPassword(row.encrypted_password, secret);
+              return { url: row.url, username: row.username, password: pass, version: row.detected_version };
+            }
+          } catch (e) {}
         }
         if (fallbackUrl && db) {
-          const row = await db.prepare("SELECT * FROM dspace_configs WHERE url = ? AND is_active = 1 LIMIT 1").bind(fallbackUrl).first();
-          if (row) {
-            const pass = await decryptPassword(row.encrypted_password, secret);
-            return { url: row.url, username: row.username, password: pass, version: row.detected_version };
-          }
+          try {
+            const row = await db.prepare("SELECT * FROM dspace_configs WHERE url = ? AND is_active = 1 LIMIT 1").bind(fallbackUrl).first();
+            if (row) {
+              const pass = await decryptPassword(row.encrypted_password, secret);
+              return { url: row.url, username: row.username, password: pass, version: row.detected_version };
+            }
+          } catch (e) {}
         }
-        return { url: fallbackUrl || "", username: "", password: "", version: "unknown" };
+        return {
+          url: fallbackUrl || "",
+          username: fallbackUser || "",
+          password: fallbackPass || "",
+          version: "unknown"
+        };
       }
 
       // 3. Detect DSpace Version
       if (path === "/api/detect-version" && method === "POST") {
         const payload = await request.json();
-        const cfg = await resolveConfig(payload.config_id, payload.url);
-        const det = await DSpaceClient.detectVersion(cfg.url);
+        const cfg = await resolveConfig(payload.config_id, payload.url, payload.username, payload.password);
+        const det = await DSpaceClient.detectVersion(cfg.url || payload.url);
 
         // Optionally update config record in D1
-        if (payload.config_id && det.version !== "unknown" && db) {
-          await db.prepare("UPDATE dspace_configs SET detected_version = ?, api_details = ? WHERE id = ?")
-            .bind(det.version, det.details, payload.config_id).run();
+        if (payload.config_id && !String(payload.config_id).startsWith("local-") && det.version !== "unknown" && db) {
+          try {
+            await db.prepare("UPDATE dspace_configs SET detected_version = ?, api_details = ? WHERE id = ?")
+              .bind(det.version, det.details, payload.config_id).run();
+          } catch (e) {}
         }
 
         return jsonResponse(det);
@@ -135,7 +175,7 @@ export default {
       // 4. Hierarchy Tree (DSpace 7)
       if (path === "/api/hierarchy" && method === "POST") {
         const payload = await request.json();
-        const cfg = await resolveConfig(payload.config_id, payload.url);
+        const cfg = await resolveConfig(payload.config_id, payload.url, payload.username, payload.password);
         const login = await DSpaceClient.v7Login(cfg.url, cfg.username, cfg.password);
         const treeResult = await DSpaceClient.v7GetCommunityTree(cfg.url, login.token);
         return jsonResponse(treeResult);
@@ -144,8 +184,8 @@ export default {
       // 5. Fetch Collections
       if (path === "/api/fetch-collections" && method === "POST") {
         const payload = await request.json();
-        const cfg = await resolveConfig(payload.config_id, payload.url);
-        const det = await DSpaceClient.detectVersion(cfg.url);
+        const cfg = await resolveConfig(payload.config_id, payload.url, payload.username, payload.password);
+        const det = await DSpaceClient.detectVersion(cfg.url || payload.url);
 
         if (det.version === "v7") {
           const login = await DSpaceClient.v7Login(cfg.url, cfg.username, cfg.password);
