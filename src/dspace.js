@@ -3,45 +3,183 @@
  */
 
 export class DSpaceClient {
+  static _apiBaseCache = new Map();
+
   static cleanUrl(url) {
     return (url || "").trim().replace(/\/+$/, "");
   }
 
+  static async resolveApiBase(baseUrl) {
+    const clean = this.cleanUrl(baseUrl);
+    if (this._apiBaseCache.has(clean)) {
+      return this._apiBaseCache.get(clean);
+    }
+
+    let urlObj;
+    try {
+      urlObj = new URL(clean);
+    } catch {
+      return `${clean}/server/api`;
+    }
+
+    const candidates = [];
+    if (urlObj.port === "4000" || clean.includes("/home")) {
+      const proto = urlObj.protocol;
+      const host = urlObj.hostname;
+      candidates.push(
+        `${proto}//${host}:8080/server/api`,
+        `${proto}//${host}:8080/server`,
+        `${proto}//${host}:8080/api`
+      );
+    }
+
+    candidates.push(
+      `${clean}/server/api`,
+      `${clean}/server`,
+      `${clean}/api`,
+      clean
+    );
+
+    for (const ep of candidates) {
+      try {
+        const resp = await fetch(ep, {
+          headers: { Accept: "application/json" },
+          cf: { cacheTtl: 0 }
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && (data.dspaceUI || data.dspaceName || data.dspaceServer || data.dspaceVersion || data._links)) {
+            let resolved = ep.replace(/\/+$/, "");
+            if (data.dspaceServer) {
+              resolved = `${data.dspaceServer.replace(/\/+$/, "")}/api`;
+            }
+            this._apiBaseCache.set(clean, resolved);
+            return resolved;
+          }
+        }
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    const fallback = urlObj.port === "4000"
+      ? `${urlObj.protocol}//${urlObj.hostname}:8080/server/api`
+      : `${clean}/server/api`;
+
+    this._apiBaseCache.set(clean, fallback);
+    return fallback;
+  }
+
   static async detectVersion(baseUrl) {
     const clean = this.cleanUrl(baseUrl);
-    // 1. Probe DSpace 7 REST API root
+    let urlObj;
     try {
-      const resp7 = await fetch(`${clean}/server/api`, {
-        headers: { Accept: "application/json" },
-        cf: { cacheTtl: 0 }
-      });
-      if (resp7.ok) {
-        const data = await resp7.json();
-        if (data && (data.dspaceUI || data.dspaceName || data.dspaceServer || data.dspaceVersion)) {
-          return {
-            version: "v7",
-            details: `DSpace 7.x REST API verified at /server/api (Name: ${data.dspaceName || "DSpace"})`,
-            api_base: `${clean}/server/api`
-          };
+      urlObj = new URL(clean);
+    } catch {
+      urlObj = null;
+    }
+
+    // 1. Probe DSpace 7+ REST API root endpoints
+    const apiCandidates = [];
+    if (urlObj && (urlObj.port === "4000" || clean.includes("/home"))) {
+      const proto = urlObj.protocol;
+      const host = urlObj.hostname;
+      apiCandidates.push(
+        `${proto}//${host}:8080/server/api`,
+        `${proto}//${host}:8080/server`,
+        `${proto}//${host}:8080/api`
+      );
+    }
+
+    apiCandidates.push(
+      `${clean}/server/api`,
+      `${clean}/server`,
+      `${clean}/api`,
+      clean
+    );
+
+    for (const ep of apiCandidates) {
+      try {
+        const resp7 = await fetch(ep, {
+          headers: { Accept: "application/json" },
+          cf: { cacheTtl: 0 }
+        });
+        if (resp7.ok) {
+          const data = await resp7.json();
+          if (data && (data.dspaceUI || data.dspaceName || data.dspaceServer || data.dspaceVersion || data._links)) {
+            const dName = data.dspaceName || "DSpace Repository";
+            const dVer = data.dspaceVersion || "DSpace 7.x/8.x";
+            let apiBase = ep.replace(/\/+$/, "");
+            if (data.dspaceServer) {
+              apiBase = `${data.dspaceServer.replace(/\/+$/, "")}/api`;
+            }
+            this._apiBaseCache.set(clean, apiBase);
+            return {
+              version: "v7",
+              details: `${dVer} REST API verified at ${apiBase} (${dName})`,
+              api_base: apiBase
+            };
+          }
         }
+      } catch {
+        // Continue probing
       }
-    } catch (e) {
-      // Continue to v6 check
     }
 
     // 2. Probe DSpace 6 SWORD 2.0 root
+    const swordCandidates = [
+      `${clean}/swordv2/servicedocument`,
+      `${clean}/swordv2`,
+      `${clean}/rest`
+    ];
+
+    for (const ep of swordCandidates) {
+      try {
+        const resp6 = await fetch(ep, {
+          cf: { cacheTtl: 0 }
+        });
+        if (resp6.status === 200 || resp6.status === 401) {
+          return {
+            version: "v6",
+            details: `DSpace 6.x SWORD 2.0 endpoint detected at ${ep}`,
+            api_base: clean
+          };
+        }
+      } catch {
+        // Ignored
+      }
+    }
+
+    // 3. Probe frontend HTML
     try {
-      const resp6 = await fetch(`${clean}/swordv2/servicedocument`, {
+      const respHtml = await fetch(clean, {
+        headers: { Accept: "text/html" },
         cf: { cacheTtl: 0 }
       });
-      if (resp6.status === 200 || resp6.status === 401) {
-        return {
-          version: "v6",
-          details: "DSpace 6.x SWORD 2.0 endpoint detected at /swordv2",
-          api_base: `${clean}/swordv2`
-        };
+      if (respHtml.ok) {
+        const html = await respHtml.text();
+        const fallbackV7 = (urlObj && urlObj.port === "4000")
+          ? `${urlObj.protocol}//${urlObj.hostname}:8080/server/api`
+          : `${clean}/server/api`;
+
+        if (html.includes("ds-root") || html.includes("dspace-angular") || html.includes("ds-header") || (html.includes("app-root") && html.toLowerCase().includes("dspace"))) {
+          this._apiBaseCache.set(clean, fallbackV7);
+          return {
+            version: "v7",
+            details: "DSpace 7.x/8.x Angular UI detected from web page inspection",
+            api_base: fallbackV7
+          };
+        }
+
+        if (html.toLowerCase().includes("xmlui") || html.toLowerCase().includes("jspui")) {
+          return {
+            version: "v6",
+            details: "DSpace 6.x / XMLUI detected from web page metadata",
+            api_base: clean
+          };
+        }
       }
-    } catch (e) {
+    } catch {
       // Ignored
     }
 
@@ -53,11 +191,11 @@ export class DSpaceClient {
   }
 
   static async v7Login(baseUrl, user, password) {
-    const clean = this.cleanUrl(baseUrl);
+    const apiBase = await this.resolveApiBase(baseUrl);
     const body = new URLSearchParams({ user, password });
 
     try {
-      const resp = await fetch(`${clean}/server/api/authn/login`, {
+      const resp = await fetch(`${apiBase}/authn/login`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: body.toString()
@@ -80,7 +218,7 @@ export class DSpaceClient {
   }
 
   static async v7GetCommunityTree(baseUrl, token = null) {
-    const clean = this.cleanUrl(baseUrl);
+    const apiBase = await this.resolveApiBase(baseUrl);
     const headers = { Accept: "application/json" };
     if (token) headers["Authorization"] = token;
 
@@ -90,7 +228,7 @@ export class DSpaceClient {
 
     try {
       while (true) {
-        const url = `${clean}/server/api/core/communities?page=${page}&size=${size}`;
+        const url = `${apiBase}/core/communities?page=${page}&size=${size}`;
         const resp = await fetch(url, { headers });
         if (!resp.ok) break;
 
@@ -139,7 +277,7 @@ export class DSpaceClient {
   }
 
   static async v7UploadItem(baseUrl, token, collectionUuid, metadata, fileBytes, fileName) {
-    const clean = this.cleanUrl(baseUrl);
+    const apiBase = await this.resolveApiBase(baseUrl);
     const headers = {
       "Content-Type": "application/json",
       "Accept": "application/json"
@@ -174,7 +312,7 @@ export class DSpaceClient {
 
     try {
       // Step 1: Create Item in Collection
-      const itemUrl = `${clean}/server/api/core/items?owningCollection=${encodeURIComponent(collectionUuid)}`;
+      const itemUrl = `${apiBase}/core/items?owningCollection=${encodeURIComponent(collectionUuid)}`;
       const createResp = await fetch(itemUrl, {
         method: "POST",
         headers,
@@ -195,7 +333,7 @@ export class DSpaceClient {
       let bitstreamMessage = "";
 
       if (fileBytes && fileBytes.byteLength > 0) {
-        const uploadBundleUrl = `${clean}/server/api/core/items/${itemUuid}/bundles`;
+        const uploadBundleUrl = `${apiBase}/core/items/${itemUuid}/bundles`;
         const bundleResp = await fetch(uploadBundleUrl, { headers });
         let originalBundleUuid = null;
 
@@ -219,7 +357,7 @@ export class DSpaceClient {
         }
 
         if (originalBundleUuid) {
-          const bitstreamUrl = `${clean}/server/api/core/bundles/${originalBundleUuid}/bitstreams?name=${encodeURIComponent(fileName)}`;
+          const bitstreamUrl = `${apiBase}/core/bundles/${originalBundleUuid}/bitstreams?name=${encodeURIComponent(fileName)}`;
           const formData = new FormData();
           formData.append("file", new Blob([fileBytes], { type: "application/pdf" }), fileName);
 
